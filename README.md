@@ -60,12 +60,15 @@ Les interfaces d'administration sont développées avec React et communiquent av
 ### Base de données
 
 * PostgreSQL
+* Neon : hébergement cloud de la base de données PostgreSQL en production.
+* Beekeeper Studio : client graphique utilisé pour se connecter à Neon et consulter et gérer les données.
 
 ### Outils de développement
 
 * Visual Studio Code
 * Postman
 * pgAdmin 4
+* Beekeeper Studio
 * Git et GitHub
 
 ## Architecture du projet
@@ -84,7 +87,7 @@ Les principaux fichiers de l'application React se trouvent dans :
 
 `frontend/src/`
 
-Le fichier `main.jsx` initialise l'application et affiche le site public ou l'interface d'administration des avis clients en fonction du chemin demandé.
+Le fichier `main.jsx` initialise l'application et affiche le site public ou l'interface d'administration en fonction du chemin demandé.
 
 #### Organisation de l'administration
 
@@ -131,7 +134,7 @@ Pendant le développement, les deux parties fonctionnent sur des serveurs locaux
 | API des avis — Backend                  | `http://localhost:8080/api/avis`       | Consultation des avis approuvés et soumission d'un avis |
 | API d'administration des avis — Backend | `http://localhost:8080/api/avis/admin` | Consultation de tous les avis, avec authentification    |
 
-Ces adresses sont utilisées en environnement local. Elles devront être adaptées lors du déploiement de l'application.
+Ces adresses correspondent à l'environnement local de développement. En production, le frontend utilise l'URL du backend hébergé sur Render.
 
 ## API REST du Backend
 
@@ -187,7 +190,7 @@ Exemples :
 * Consultation des avis dans l'administration : `GET http://localhost:8080/api/avis/admin`
 * Approbation ou retrait d'un avis : `PATCH http://localhost:8080/api/avis/admin/{id}/approbation`
 
-Le frontend et le backend doivent tous les deux être démarrés pour que les fonctionnalités nécessitant l'API puissent fonctionner.
+Le frontend et le backend doivent tous les deux être démarrés pour que les fonctionnalités nécessitant l'API puissent fonctionner en environnement local.
 
 ### Authentification de l'administration
 
@@ -293,13 +296,118 @@ Les fonctionnalités de l'administration ont également fait l'objet de vérific
 * La gestion des sessions de connexion et de déconnexion.
 * L'accès aux différentes interfaces de gestion.
 
+## Mise en production
+
+L'application est déployée en ligne. Le frontend et le backend sont hébergés séparément sur Render, tandis que la base de données PostgreSQL est hébergée sur Neon.
+
+### Adresses de production
+
+| Composant                      | Adresse                                                      | Description                                    |
+| ------------------------------ | ------------------------------------------------------------ | ---------------------------------------------- |
+| Site web — Frontend            | `https://steveroggers-frontend.onrender.com`                 | Application React accessible aux visiteurs     |
+| API REST — Backend             | `https://steveroggers.onrender.com`                          | API Spring Boot utilisée par le frontend       |
+| API des devis                  | `https://steveroggers.onrender.com/api/v1/devis`             | Création et consultation des demandes de devis |
+| API des avis clients           | `https://steveroggers.onrender.com/api/avis`                 | Soumission et consultation des avis clients    |
+| Tableau de bord administrateur | `https://steveroggers-frontend.onrender.com/admin/dashboard` | Accès à l'espace d'administration              |
+
+### Hébergement et rôle des outils
+
+* **Render — Frontend :** héberge le site React/Vite sous forme de site statique.
+* **Render — Backend :** héberge l'application Java Spring Boot et expose l'API REST.
+* **Neon :** héberge la base de données PostgreSQL dans le cloud. Les demandes de devis et les avis clients sont enregistrés dans cette base par le backend.
+* **Beekeeper Studio :** outil client utilisé pour se connecter à la base Neon, consulter les tables et vérifier les données. Beekeeper Studio ne sert pas à héberger la base de données.
+* **GitHub :** héberge le dépôt du code source. Les modifications sont envoyées depuis le poste de développement avec Git. Le push sur la branche `master` déclenche le déploiement automatique configuré sur Render.
+
+### Configuration des routes du frontend sur Render
+
+Le frontend utilise React pour gérer les pages côté navigateur. Pour permettre l'accès direct aux routes de l'application et éviter une erreur `404` lors de l'ouverture ou de l'actualisation d'une page comme `/admin/dashboard`, une règle de réécriture (Rewrite) a été ajoutée dans les paramètres du site statique Render :
+
+| Type      | Source | Destination   | Action    |
+| --------- | ------ | ------------- | --------- |
+| Règle SPA | `/*`   | `/index.html` | `Rewrite` |
+
+Cette règle renvoie les requêtes de pages vers le point d'entrée HTML de l'application. React peut ensuite afficher la page correspondant au chemin demandé. L'URL affichée dans le navigateur est conservée.
+
+### Communication frontend / backend en production
+
+Les appels du frontend destinés au backend utilisent l'origine de production :
+
+`https://steveroggers.onrender.com`
+
+Les principaux endpoints utilisés par le frontend sont :
+
+| Méthode HTTP | Endpoint                           | Fonction                                  |
+| ------------ | ---------------------------------- | ----------------------------------------- |
+| `GET`        | `/api/avis`                        | Charger les avis clients publiés          |
+| `POST`       | `/api/avis`                        | Envoyer un nouvel avis client             |
+| `GET`        | `/api/v1/devis`                    | Récupérer les demandes de devis           |
+| `POST`       | `/api/v1/devis`                    | Enregistrer une nouvelle demande de devis |
+| `PATCH`      | `/api/v1/devis/{id}/statut`        | Modifier le statut d'une demande de devis |
+| `GET`        | `/api/avis/admin`                  | Récupérer les avis pour l'administration  |
+| `PATCH`      | `/api/avis/admin/{id}/approbation` | Modifier l'approbation d'un avis          |
+
+Les routes de gestion des administrateurs sont également utilisées par l'interface d'administration sous le préfixe `/api/admin/administrateurs`. Les opérations administratives restent soumises aux règles d'authentification et d'autorisation configurées dans Spring Security.
+
+### Parcours de demande de devis
+
+1. Le visiteur remplit le formulaire de demande de devis sur le site.
+2. Le frontend transmet les informations au backend avec `POST /api/v1/devis`.
+3. Le backend enregistre la demande dans PostgreSQL sur Neon.
+4. Après confirmation de l'enregistrement, le frontend prépare le message contenant les informations de la demande et ouvre WhatsApp avec un lien `https://wa.me/`.
+5. La demande enregistrée peut ensuite être consultée dans l'espace d'administration.
+
+L'ouverture de WhatsApp intervient après la réponse positive du backend. Le frontend ouvre d'abord un nouvel onglet au clic de l'utilisateur, puis le redirige vers le lien WhatsApp après l'enregistrement afin de limiter le blocage des fenêtres contextuelles par le navigateur.
+
+### Parcours des avis clients
+
+1. Le visiteur soumet un avis depuis le formulaire public.
+2. Le frontend transmet l'avis au backend avec `POST /api/avis`.
+3. Le backend traite et enregistre l'avis dans PostgreSQL sur Neon.
+4. Les avis sont consultables dans l'administration pour modération.
+5. Les avis approuvés sont récupérés par le site public avec `GET /api/avis`.
+
+### Configuration et sécurité en production
+
+* Les URL du frontend pointent vers le backend Render et non vers `localhost`.
+* Le backend autorise l'origine du frontend de production dans sa configuration CORS.
+* Les informations de connexion à Neon et les autres paramètres sensibles doivent être configurés dans les variables d'environnement du service backend sur Render.
+* Les mots de passe, chaînes de connexion et secrets ne doivent pas être ajoutés au dépôt GitHub ni au README.
+* Les routes d'administration doivent rester protégées par Spring Security.
+
+### Vérifications réalisées après déploiement
+
+Les vérifications suivantes ont été effectuées sur les services en production :
+
+* Ouverture du site public hébergé sur Render.
+* Accès direct à `/admin/dashboard` après configuration de la règle Rewrite.
+* Envoi de demandes de devis depuis le formulaire public.
+* Vérification de l'enregistrement des demandes par l'API et de leur affichage dans le tableau de bord.
+* Vérification de l'ouverture de WhatsApp après l'enregistrement d'une demande.
+* Soumission d'avis clients depuis le site.
+* Vérification du fonctionnement des échanges entre le frontend, le backend Spring Boot et PostgreSQL sur Neon.
+* Utilisation de Beekeeper Studio pour se connecter à Neon et consulter les données.
+
+### Déploiement et mise à jour
+
+Pour publier une nouvelle version du frontend ou du backend :
+
+1. Effectuer et tester les modifications en local.
+2. Vérifier les changements avec `git status`.
+3. Ajouter les fichiers nécessaires avec `git add .`.
+4. Créer un commit avec `git commit -m "description des modifications"`.
+5. Envoyer les modifications vers GitHub avec `git push origin master`.
+6. Vérifier dans Render que le déploiement correspondant se termine avec le statut `Live`.
+7. Tester les fonctionnalités concernées sur les URL de production.
+
+Le déploiement automatique dépend de la configuration du dépôt GitHub et du service Render correspondant.
+
 ## Évolutions prévues
 
-* Poursuite de l'intégration du frontend avec l'API.
-* Finalisation et amélioration de l'interface d'administration.
-* Vérification complète des fonctionnalités.
-* Déploiement de l'application.
-* Configuration des adresses de production et des paramètres de sécurité associés.
+* Poursuite de l'amélioration de l'interface d'administration.
+* Amélioration continue de l'expérience utilisateur.
+* Ajout éventuel de nouvelles fonctionnalités de gestion.
+* Renforcement et suivi de la sécurité.
+* Optimisation des performances et de la supervision de l'application.
 
 ## Auteur
 
